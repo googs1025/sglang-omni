@@ -8,11 +8,10 @@ from sglang_omni.platforms.apple import AppleOmniPlatform
 from sglang_omni.platforms.cpu import CPUOmniPlatform
 from sglang_omni.platforms.cuda import CUDAOmniPlatform
 from sglang_omni.platforms.interface import OmniPlatform
+from sglang_omni.platforms.musa import MUSAOmniPlatform
 from sglang_omni.platforms.npu import NPUOmniPlatform
 from sglang_omni.platforms.rocm import ROCMOmniPlatform
 from sglang_omni.platforms.xpu import XPUOmniPlatform
-
-MUSA_PLATFORM_QUALNAME = "sglang_omni.platforms.musa.MUSAOmniPlatform"
 
 
 def load_platform_class(qualname: str) -> type[OmniPlatform]:
@@ -34,29 +33,6 @@ def load_platform_class(qualname: str) -> type[OmniPlatform]:
         (cls, OmniPlatform),
         {"_omni_platform_qualname": qualname},
     )
-
-
-def load_musa_platform() -> OmniPlatform:
-    try:
-        pkgutil.resolve_name("torchada")
-    except ModuleNotFoundError as exc:
-        if exc.name == "torchada":
-            raise RuntimeError(
-                "MUSA requires TorchAda, but the 'torchada' package is not installed."
-            ) from exc
-        else:
-            raise RuntimeError(f"TorchAda failed to initialize for MUSA: {exc}") from exc
-    except ImportError as exc:
-        raise RuntimeError(f"TorchAda failed to initialize for MUSA: {exc}") from exc
-    return load_platform_class(MUSA_PLATFORM_QUALNAME)()
-
-
-def load_platform_spec(qualname: str) -> OmniPlatform:
-    if qualname == MUSA_PLATFORM_QUALNAME:
-        return load_musa_platform()
-    else:
-        pass
-    return load_platform_class(qualname)()
 
 
 def as_omni_platform(platform: SRTPlatform) -> OmniPlatform:
@@ -85,7 +61,7 @@ def as_omni_platform(platform: SRTPlatform) -> OmniPlatform:
     else:
         pass
     if platform.is_musa():
-        return load_musa_platform()
+        return MUSAOmniPlatform()
     else:
         pass
     qualname = f"{type(platform).__module__}.{type(platform).__qualname__}"
@@ -110,13 +86,5 @@ def get_platform_spec(platform: OmniPlatform) -> str:
 
 platform_spec = os.environ.get("SGLANG_OMNI_PLATFORM_SPEC")
 current_platform = (
-    load_platform_spec(platform_spec) if platform_spec else resolve_platform()
+    load_platform_class(platform_spec)() if platform_spec else resolve_platform()
 )
-
-
-def __getattr__(name: str) -> type[OmniPlatform]:
-    if name == "MUSAOmniPlatform":
-        return load_platform_class(MUSA_PLATFORM_QUALNAME)
-    else:
-        pass
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
