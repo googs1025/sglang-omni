@@ -1,12 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
 import torch
 from sglang.srt.arg_groups.overrides import resolution_result
+from sglang.srt.platforms.cpu import CpuSRTPlatform
 from sglang.srt.platforms.device_mixin import DeviceMixin, PlatformEnum
 from sglang.srt.platforms.interface import SRTPlatform
 from sglang.srt.platforms.rocm import RocmSRTPlatform
@@ -36,6 +40,141 @@ class VendorDeviceMixin(DeviceMixin):
 
 class VendorSRTPlatform(SRTPlatform, VendorDeviceMixin):
     pass
+
+
+class MusaDeviceMixin(DeviceMixin):
+    _enum = PlatformEnum.MUSA
+    device_name = "musa"
+    device_type = "musa"
+
+
+class MusaSRTPlatform(SRTPlatform, MusaDeviceMixin):
+    pass
+
+
+def test_cpu_import_does_not_emit_a_torchada_warning() -> None:
+    environment = dict(os.environ)
+    environment["SGLANG_USE_CPU_ENGINE"] = "1"
+    environment.pop("SGLANG_OMNI_PLATFORM_SPEC", None)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sglang_omni.platforms as p; print(p.current_platform.device_type)",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "cpu"
+    assert "torchada" not in result.stderr.lower()
+
+
+def test_non_musa_platform_does_not_activate_torchada(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_torchada_activation() -> None:
+        raise AssertionError("non-MUSA platform activated TorchAda")
+
+    monkeypatch.setattr(
+        platforms,
+        "load_musa_platform",
+        reject_torchada_activation,
+        raising=False,
+    )
+
+    assert type(platforms.as_omni_platform(CpuSRTPlatform())) is CPUOmniPlatform
+
+
+def test_musa_platform_uses_the_validated_loader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = OmniPlatform()
+
+    def load_expected_platform() -> OmniPlatform:
+        return expected
+
+    monkeypatch.setattr(
+        platforms,
+        "load_musa_platform",
+        load_expected_platform,
+        raising=False,
+    )
+
+    assert platforms.as_omni_platform(MusaSRTPlatform()) is expected
+
+
+def test_explicit_builtin_musa_platform_uses_the_validated_loader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = OmniPlatform()
+
+    def load_expected_platform() -> OmniPlatform:
+        return expected
+
+    monkeypatch.setattr(
+        platforms,
+        "load_musa_platform",
+        load_expected_platform,
+        raising=False,
+    )
+
+    assert platforms.load_platform_spec(platforms.MUSA_PLATFORM_QUALNAME) is expected
+
+
+def test_custom_platform_spec_keeps_the_generic_loader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CustomOmniPlatform(OmniPlatform):
+        pass
+
+    def load_custom_platform(qualname: str) -> type[OmniPlatform]:
+        assert qualname == "vendor.CustomPlatform"
+        return CustomOmniPlatform
+
+    monkeypatch.setattr(
+        platforms,
+        "load_platform_class",
+        load_custom_platform,
+    )
+
+    assert (
+        type(platforms.load_platform_spec("vendor.CustomPlatform"))
+        is CustomOmniPlatform
+    )
+
+
+def test_musa_platform_requires_torchada(monkeypatch: pytest.MonkeyPatch) -> None:
+    def missing_torchada(name: str) -> None:
+        assert name == "torchada"
+        raise ModuleNotFoundError("No module named 'torchada'", name="torchada")
+
+    monkeypatch.setattr(platforms.pkgutil, "resolve_name", missing_torchada)
+
+    with pytest.raises(RuntimeError, match="MUSA requires TorchAda") as exc_info:
+        platforms.load_musa_platform()
+
+    assert isinstance(exc_info.value.__cause__, ModuleNotFoundError)
+
+
+def test_musa_platform_preserves_a_broken_torchada_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken_torchada(name: str) -> None:
+        assert name == "torchada"
+        raise ModuleNotFoundError("No module named 'torch_musa'", name="torch_musa")
+
+    monkeypatch.setattr(platforms.pkgutil, "resolve_name", broken_torchada)
+
+    with pytest.raises(RuntimeError, match="TorchAda failed to initialize") as exc_info:
+        platforms.load_musa_platform()
+
+    assert isinstance(exc_info.value.__cause__, ModuleNotFoundError)
+    assert exc_info.value.__cause__.name == "torch_musa"
 
 
 def test_cuda_tp_stage_env_is_the_narrowing_plus_nvls_off() -> None:
