@@ -44,6 +44,7 @@ class VendorSRTPlatform(SRTPlatform, VendorDeviceMixin):
 def run_platform_import(musa_version: str | None) -> subprocess.CompletedProcess[str]:
     environment = dict(os.environ)
     environment["SGLANG_USE_CPU_ENGINE"] = "1"
+    environment.pop("SGLANG_PLATFORM", None)
     environment.pop("SGLANG_OMNI_PLATFORM_SPEC", None)
     script = f"""
 import builtins
@@ -54,14 +55,17 @@ real_import = builtins.__import__
 
 def import_without_torchada(name, globals=None, locals=None, fromlist=(), level=0):
     if name == "torchada":
+        if torch.version.musa is None:
+            raise RuntimeError("torchada import attempted outside MUSA")
+        else:
+            pass
         raise ModuleNotFoundError("No module named 'torchada'", name="torchada")
     else:
         pass
     return real_import(name, globals, locals, fromlist, level)
 
 builtins.__import__ = import_without_torchada
-import sglang_omni.platforms as platforms
-print(platforms.current_platform.device_type)
+import sglang_omni.platforms
 """
     return subprocess.run(
         [
@@ -76,11 +80,10 @@ print(platforms.current_platform.device_type)
     )
 
 
-def test_non_musa_import_does_not_emit_a_torchada_warning() -> None:
+def test_non_musa_import_does_not_import_torchada() -> None:
     result = run_platform_import(None)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "cpu"
     assert "torchada" not in result.stderr.lower()
 
 

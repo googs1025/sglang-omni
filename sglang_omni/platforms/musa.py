@@ -21,15 +21,15 @@ else:
 
 logger = logging.getLogger(__name__)
 
-try:
-    import torchada  # noqa: F401
-except ImportError as exc:
-    if hasattr(torch.version, "musa") and torch.version.musa is not None:
+if hasattr(torch.version, "musa") and torch.version.musa is not None:
+    try:
+        import torchada  # noqa: F401
+    except ImportError as exc:
         logger.warning(
             f"Failed to import torchada: {exc}. MUSA platform compatibility will not work."
         )
-    else:
-        pass
+else:
+    pass
 
 
 class MUSAOmniPlatform(CUDAOmniPlatform):
