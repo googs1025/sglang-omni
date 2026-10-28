@@ -641,16 +641,44 @@ def test_check_gpu_json_output(monkeypatch) -> None:
         "environment": {"logical_device_count": 0},
         "gpus": [],
     }
-    monkeypatch.setattr(
-        check_gpu_module,
-        "collect_gpu_diagnostics",
-        lambda: report,
-    )
+
+    def noisy_collect() -> dict[str, object]:
+        print("Dependency initialization log")
+        return report
+
+    monkeypatch.setattr(check_gpu_module, "collect_gpu_diagnostics", noisy_collect)
 
     result = CliRunner().invoke(app, ["check-gpu", "--json"])
 
     assert result.exit_code == 0
     assert json.loads(result.stdout) == report
+    assert "Dependency initialization log" in result.stderr
+
+
+def test_cli_import_routes_dependency_output_to_stderr() -> None:
+    script = """
+import builtins
+
+original_import = builtins.__import__
+
+def noisy_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if name == "check_gpu" and level == 1:
+        print("Dependency startup log")
+    return original_import(name, globals, locals, fromlist, level)
+
+builtins.__import__ = noisy_import
+import sglang_omni.cli
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert "Dependency startup log" in result.stderr
 
 
 def test_check_gpu_strict_fails_on_warning(monkeypatch) -> None:
